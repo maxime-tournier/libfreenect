@@ -419,3 +419,9 @@ int freenect_update_tilt_state(freenect_device *dev)
 {
 	return 0;
 }
+
+int freenect_set_flag(freenect_device *dev, freenect_flag flag, freenect_flag_value value)
+{
+    return 0;
+}
+

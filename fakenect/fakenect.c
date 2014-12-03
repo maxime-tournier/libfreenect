@@ -36,6 +36,7 @@
 
 // The dev and ctx are just faked with these numbers
 
+static freenect_frame_mode depth_mode;
 static freenect_device *fake_dev = (freenect_device *)1234;
 static freenect_context *fake_ctx = (freenect_context *)5678;
 static freenect_depth_cb cur_depth_cb = NULL;
@@ -51,6 +52,9 @@ static void *rgb_buffer = NULL;
 static int depth_running = 0;
 static int rgb_running = 0;
 static void *user_ptr = NULL;
+
+
+void depth_convert_11bit_mm(freenect_device* dev, void* depth, uint32_t timestamp);
 
 static char *one_line(FILE *fp)
 {
@@ -167,8 +171,8 @@ int freenect_process_events(freenect_context *ctx)
 			if (cur_depth_cb && depth_running) {
 				void *cur_depth = skip_line(data);
 				if (depth_buffer) {
-					memcpy(depth_buffer, cur_depth, freenect_find_depth_mode(FREENECT_RESOLUTION_MEDIUM, FREENECT_DEPTH_11BIT).bytes);
-					cur_depth = depth_buffer;
+				  memcpy(depth_buffer, cur_depth, depth_mode.bytes);
+				  cur_depth = depth_buffer;
 				}
 				cur_depth_cb(fake_dev, cur_depth, timestamp);
 			}
@@ -177,7 +181,9 @@ int freenect_process_events(freenect_context *ctx)
 			if (cur_rgb_cb && rgb_running) {
 				void *cur_rgb = skip_line(data);
 				if (rgb_buffer) {
-					memcpy(rgb_buffer, cur_rgb, freenect_find_video_mode(FREENECT_RESOLUTION_MEDIUM, FREENECT_VIDEO_RGB).bytes);
+					memcpy(rgb_buffer, cur_rgb,
+						   freenect_find_video_mode(FREENECT_RESOLUTION_MEDIUM,
+													FREENECT_VIDEO_RGB).bytes);
 					cur_rgb = rgb_buffer;
 				}
 				cur_rgb_cb(fake_dev, cur_rgb, timestamp);
@@ -252,9 +258,18 @@ int freenect_set_video_mode(freenect_device* dev, const freenect_frame_mode mode
 
 int freenect_set_depth_mode(freenect_device* dev, const freenect_frame_mode mode)
 {
-        // Always say it was successful but continue to pass through the
-        // underlying data.  Would be better to check for conflict.
-        return 0;
+
+  // Always say it was successful but continue to pass through the
+  // underlying data.  Would be better to check for conflict.
+  assert( FREENECT_DEPTH_MM == mode.depth_format || FREENECT_DEPTH_11BIT == mode.depth_format );
+  depth_mode = mode;
+
+  /* TODO set conversion callback */
+  /* if( FREENECT_DEPTH_MM == mode.depth_format ) { */
+  /* 	freenect_set_depth_callback( dev, depth_convert_11bit_mm ); */
+  /* } */
+  
+  return 0;
 }
 
 freenect_frame_mode freenect_find_video_mode(freenect_resolution res, freenect_video_format fmt) {
@@ -283,10 +298,12 @@ freenect_frame_mode freenect_get_current_video_mode(freenect_device *dev)
 
 freenect_frame_mode freenect_find_depth_mode(freenect_resolution res, freenect_depth_format fmt) {
     assert(FREENECT_RESOLUTION_MEDIUM == res);
-    assert(FREENECT_DEPTH_11BIT == fmt);
-    // NOTE: This will leave uninitialized values if new fields are added.
+    assert(FREENECT_DEPTH_11BIT == fmt || FREENECT_DEPTH_MM == fmt);
+
+	// NOTE: This will leave uninitialized values if new fields are added.
     // To update this line run the "record" program, look at the top output
-    freenect_frame_mode out = {256, 1, {0}, 614400, 640, 480, 11, 5, 30, 1};
+
+	freenect_frame_mode out = {256, res, {fmt}, 614400, 640, 480, 11, 5, 30, 1};
     return out;
 }
 
@@ -393,6 +410,7 @@ int freenect_set_video_format(freenect_device *dev, freenect_video_format fmt)
 }
 int freenect_set_depth_format(freenect_device *dev, freenect_depth_format fmt)
 {
+  printf("set_depth_format\n");
 	assert(fmt == FREENECT_DEPTH_11BIT);
 	return 0;
 }
@@ -425,3 +443,21 @@ int freenect_set_flag(freenect_device *dev, freenect_flag flag, freenect_flag_va
     return 0;
 }
 
+
+
+void depth_convert_11bit_mm(freenect_device* dev, void* depth, uint32_t timestamp) {
+  const float k1 = 1.1863;
+  const float k2 = 2842.5;
+  const float k3 = 0.1236 * 1000;
+
+  uint16_t* buf;
+
+  for( buf = depth; buf < (void*) (depth + depth_mode.bytes); ++buf ) {
+	
+	const float depth = k3 * tanf( *buf / k2 + k1);
+	// printf("%f ", depth);
+	*buf = depth;
+  }
+
+
+}

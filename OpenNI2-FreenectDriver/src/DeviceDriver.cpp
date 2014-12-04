@@ -276,7 +276,6 @@ namespace FreenectDriver
 
     oni::driver::DeviceBase* deviceOpen(const char* uri, const char* mode = NULL)
     {
-	  std::cout << "deviceOpen" << std::endl;
       for (OniDeviceMap::iterator iter = devices.begin(); iter != devices.end(); iter++)
       {
         if (strcmp(iter->first.uri, uri) == 0) // found
@@ -345,7 +344,6 @@ namespace FreenectDriver
     */
   };
 }
-
 
 // macros defined in XnLib (not included) - workaround
 #define XN_NEW(type, arg...) new type(arg)

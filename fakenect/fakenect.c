@@ -32,11 +32,13 @@
 #include <unistd.h>
 #include <assert.h>
 
+#include "libfreenect_registration.h"
+
+
 #define GRAVITY 9.80665
 
 // The dev and ctx are just faked with these numbers
 
-static freenect_frame_mode depth_mode;
 static freenect_device *fake_dev = (freenect_device *)1234;
 static freenect_context *fake_ctx = (freenect_context *)5678;
 static freenect_depth_cb cur_depth_cb = NULL;
@@ -52,9 +54,10 @@ static void *rgb_buffer = NULL;
 static int depth_running = 0;
 static int rgb_running = 0;
 static void *user_ptr = NULL;
+static freenect_frame_mode depth_mode;
 
-
-void depth_convert_11bit_mm(freenect_device* dev, void* depth, uint32_t timestamp);
+static void fill_raw_to_mm_shift();
+static void depth_convert_11bit_mm(freenect_device* dev, void* depth, uint32_t timestamp);
 
 static char *one_line(FILE *fp)
 {
@@ -174,6 +177,11 @@ int freenect_process_events(freenect_context *ctx)
 				  memcpy(depth_buffer, cur_depth, depth_mode.bytes);
 				  cur_depth = depth_buffer;
 				}
+				
+				if( depth_mode.depth_format == FREENECT_DEPTH_MM) {
+				  depth_convert_11bit_mm(fake_dev, cur_depth, timestamp);
+				}
+				
 				cur_depth_cb(fake_dev, cur_depth, timestamp);
 			}
 			break;
@@ -261,16 +269,17 @@ int freenect_set_depth_mode(freenect_device* dev, const freenect_frame_mode mode
 
   // Always say it was successful but continue to pass through the
   // underlying data.  Would be better to check for conflict.
-  assert( FREENECT_DEPTH_MM == mode.depth_format || FREENECT_DEPTH_11BIT == mode.depth_format );
+  assert(mode.depth_format == FREENECT_DEPTH_11BIT || mode.depth_format == FREENECT_DEPTH_MM);
+
   depth_mode = mode;
 
-  /* TODO set conversion callback */
-  /* if( FREENECT_DEPTH_MM == mode.depth_format ) { */
-  /* 	freenect_set_depth_callback( dev, depth_convert_11bit_mm ); */
-  /* } */
-  
+  if( mode.depth_format == FREENECT_DEPTH_MM ) {
+	fill_raw_to_mm_shift();
+  }
+
   return 0;
 }
+
 
 freenect_frame_mode freenect_find_video_mode(freenect_resolution res, freenect_video_format fmt) {
     assert(FREENECT_RESOLUTION_MEDIUM == res);
@@ -444,20 +453,53 @@ int freenect_set_flag(freenect_device *dev, freenect_flag flag, freenect_flag_va
 }
 
 
+#define S2D_CONST_OFFSET 0.375
+static double shift_scale = 10;
+static double parameter_coefficient = 4;
+static double pixel_size_factor = 1;
 
-void depth_convert_11bit_mm(freenect_device* dev, void* depth, uint32_t timestamp) {
-  const float k1 = 1.1863;
-  const float k2 = 2842.5;
-  const float k3 = 0.1236 * 1000;
-
-  uint16_t* buf;
-
-  for( buf = depth; buf < (void*) (depth + depth_mode.bytes); ++buf ) {
+/// convert raw shift value to metric depth (in mm)
+static uint16_t freenect_raw_to_mm(uint16_t raw,
+								   double const_shift,
+								   freenect_zero_plane_info* zpi)
+{
+	const double fixed_ref_x = ((raw - (parameter_coefficient * const_shift / pixel_size_factor)) / parameter_coefficient) - S2D_CONST_OFFSET;
 	
-	const float depth = k3 * tanf( *buf / k2 + k1);
-	// printf("%f ", depth);
-	*buf = depth;
-  }
+	const double metric = fixed_ref_x * zpi->reference_pixel_size * pixel_size_factor;
 
+	return shift_scale * ((metric * zpi->reference_distance / (zpi->dcmos_emitter_dist - metric)) + zpi->reference_distance);
+	
+}
+
+static double const_shift = 200.0;
+static freenect_zero_plane_info zpi = {7.5, 2.3, 120.0, 0.104200};
+static uint16_t raw_to_mm_shift[FREENECT_DEPTH_RAW_MAX_VALUE];
+
+static void fill_raw_to_mm_shift() {
+
+  unsigned i;
+  for (i = 0; i < FREENECT_DEPTH_RAW_MAX_VALUE; i++) {
+	raw_to_mm_shift[i] = freenect_raw_to_mm( i, const_shift, &zpi);
+  }
+  
+  raw_to_mm_shift[FREENECT_DEPTH_RAW_NO_VALUE] = FREENECT_DEPTH_MM_NO_VALUE;
+}
+
+static void depth_convert_11bit_mm(freenect_device* dev, void* depth, uint32_t timestamp) {
+
+  uint16_t* buf = depth;
+  unsigned size = depth_mode.bytes / sizeof(uint16_t);
+  uint16_t* end = buf + size;
+  
+  for( buf = depth; buf < end; ++buf ) {
+
+	uint16_t metric = raw_to_mm_shift[ *buf ];
+	
+	if( metric >= FREENECT_DEPTH_MM_MAX_VALUE ) {
+	  metric = FREENECT_DEPTH_MM_MAX_VALUE;
+	}
+
+	*buf = metric;
+  }
 
 }

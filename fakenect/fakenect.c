@@ -56,6 +56,8 @@ static int rgb_running = 0;
 static void *user_ptr = NULL;
 static freenect_frame_mode depth_mode;
 
+int fakenect_convert = -1;
+
 static void fill_raw_to_mm_shift();
 static void depth_convert_11bit_mm(freenect_device* dev, void* depth, uint32_t timestamp);
 
@@ -157,6 +159,17 @@ int freenect_process_events(freenect_context *ctx)
 	 */
 	if (!index_fp)
 		open_index();
+
+	char* dont_convert;
+	if( fakenect_convert < 1) {
+	  dont_convert = getenv("FAKENECT_DONT_CONVERT");
+	  if( dont_convert ) {
+		fakenect_convert = 0;
+	  } else {
+		fakenect_convert = 1;
+	  }
+	}
+	
 	char type;
 	double record_cur_time;
 	unsigned int timestamp, data_size;
@@ -178,7 +191,7 @@ int freenect_process_events(freenect_context *ctx)
 				  cur_depth = depth_buffer;
 				}
 				
-				if( depth_mode.depth_format == FREENECT_DEPTH_MM) {
+				if( fakenect_convert && (depth_mode.depth_format == FREENECT_DEPTH_MM)) {
 				  depth_convert_11bit_mm(fake_dev, cur_depth, timestamp);
 				}
 				
